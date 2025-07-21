@@ -1,0 +1,6 @@
+sudo apt-get install tesseract-ocr
+
+pip install -r req.txt
+
+
+streamlit run app.py
