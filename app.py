@@ -1,12 +1,12 @@
 import streamlit as st
-import os # CHANGED: Added os import
-import google.generativeai as genai # CHANGED: Added google import
+import os 
+import google.generativeai as genai
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings # CHANGED
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI # CHANGED
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain.chains import create_retrieval_chain
