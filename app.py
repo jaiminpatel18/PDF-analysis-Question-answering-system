@@ -9,12 +9,17 @@ from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI # CHANGED
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate
+import nest_asyncio
+
 
 # Main function to structure the Streamlit app
 def main():
     # Load environment variables
     load_dotenv()
-    
+    nest_asyncio.apply()
     # CHANGED: Configure the Google API key
     genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
     
@@ -87,28 +92,41 @@ def get_vectorstore(text_chunks):
 
 # Function to create the conversation chain
 def get_conversation_chain(vectorstore):
-    # CHANGED: Initialize the Gemini model
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0.7)
     
-    memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
+    # This prompt ensures the LLM uses the context to answer the question
+    prompt = ChatPromptTemplate.from_template("""
+        Answer the following question based only on the provided context:
+        <context>
+        {context}
+        </context>
+        Question: {input}
+    """)
     
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vectorstore.as_retriever(),
-        memory=memory
-    )
-    return conversation_chain
+    # This chain will combine the documents into a single string for the LLM
+    document_chain = create_stuff_documents_chain(llm, prompt)
+    
+    # This is the main chain that retrieves documents and then passes them to the document_chain
+    retriever = vectorstore.as_retriever()
+    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+    
+    return retrieval_chain
+
 
 # Function to handle user input and display chat history
 def handle_user_input(user_question):
-    response = st.session_state.conversation({'question': user_question})
-    st.session_state.chat_history = response['chat_history']
-
-    for i, message in enumerate(st.session_state.chat_history):
-        if i % 2 == 0:
-            st.write(f"**You:** {message.content}")
-        else:
-            st.write(f"**Bot:** {message.content}")
+    # The new chain is invoked with an 'input' dictionary
+    response = st.session_state.conversation.invoke({'input': user_question})
+    
+    # Display the answer
+    st.write(f"**Bot:** {response['answer']}")
+    
+    # Display the source documents in an expander
+    with st.expander("View Sources"):
+        st.subheader("Sources used to generate the answer:")
+        for i, doc in enumerate(response["context"]):
+            st.markdown(f"**Source {i+1}:**")
+            st.info(doc.page_content)
 
 
 # Entry point of the script

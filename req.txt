@@ -7,3 +7,4 @@ python-dotenv
 pytesseract
 langchain_community
 google-generativeai
+nest_asyncio
