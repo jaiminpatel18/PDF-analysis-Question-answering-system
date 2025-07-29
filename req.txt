@@ -8,3 +8,10 @@ pytesseract
 langchain_community
 google-generativeai
 nest_asyncio
+keybert
+scikit-learn
+wordcloud
+matplotlib
+fpdf
+markdown
+numpy
