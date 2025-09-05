@@ -1,6 +1,7 @@
 sudo apt-get install tesseract-ocr
+python3 -m venv venv
 
 pip install -r req.txt
 
-
+pip install faiss-cpu
 streamlit run app.py

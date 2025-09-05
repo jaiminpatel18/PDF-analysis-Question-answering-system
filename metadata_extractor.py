@@ -11,12 +11,14 @@ class PDFMetadataExtractor:
         reader = PdfReader(pdf_file)
         info = reader.metadata
         
+        # Safely access metadata attributes to prevent errors
         metadata = {
-            "title": info.title if info.title else self._extract_title_from_content(reader),
-            "author": info.author if info.author else "Unknown",
-            "creation_date": info.creation_date.isoformat() if hasattr(info, 'creation_date') and info.creation_date else datetime.now().isoformat(),
+            "title": getattr(info, 'title', None) or self._extract_title_from_content(reader),
+            "author": getattr(info, 'author', "Unknown"),
+            # CORRECTED LINE: Handles cases where creation_date is missing or None
+            "creation_date": (getattr(info, 'creation_date', None) or datetime.now()).isoformat(),
             "page_count": len(reader.pages),
-            "keywords": info.keywords if info.keywords else []
+            "keywords": getattr(info, 'keywords', [])
         }
         
         return metadata
@@ -25,10 +27,11 @@ class PDFMetadataExtractor:
         """Try to extract title from the first page content"""
         if len(reader.pages) > 0:
             text = reader.pages[0].extract_text()
-            lines = text.strip().split('\n')
-            if lines:
-                # Heuristic: First non-empty line might be the title
-                for line in lines:
-                    if line.strip() and len(line.strip()) < 100:  # Reasonable title length
-                        return line.strip()
+            if text:
+                lines = text.strip().split('\n')
+                if lines:
+                    # Heuristic: First non-empty line might be the title
+                    for line in lines:
+                        if line.strip() and len(line.strip()) < 100:  # Reasonable title length
+                            return line.strip()
         return "Untitled Document"
