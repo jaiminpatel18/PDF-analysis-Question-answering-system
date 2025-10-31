@@ -136,10 +136,11 @@
 import streamlit as st
 import os
 import google.generativeai as genai
+from google.api_core.exceptions import NotFound as GoogleNotFound
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.memory import ConversationBufferMemory
@@ -152,6 +153,15 @@ import tempfile
 from datetime import datetime
 from document_management import DocumentManager
 from metadata_extractor import PDFMetadataExtractor
+
+# Helper to normalize model names (remove deprecated "-latest" suffix)
+def _normalize_model_name(name: str) -> str:
+    try:
+        if name.endswith("-latest"):
+            return name.replace("-latest", "")
+        return name
+    except Exception:
+        return name
 
 # Initialize document manager and metadata extractor
 document_manager = DocumentManager()
@@ -316,7 +326,8 @@ def main():
         st.header("Settings")
         st.write("**AI Model Settings**")
         model_temperature = st.slider("Temperature (Creativity)", min_value=0.0, max_value=1.0, value=0.7, step=0.1)
-        model_name = st.selectbox("Model", ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest"])
+        # Use supported model IDs; include a safe fallback (gemini-pro)
+        model_name = st.selectbox("Model", ["gemini-pro", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b"]) 
         
         if st.button("Apply Settings"):
             st.session_state.model_temperature = model_temperature
@@ -327,7 +338,7 @@ def main():
             if st.session_state.current_documents and hasattr(st.session_state, 'vectorstore'):
                 st.session_state.conversation = get_conversation_chain(
                     st.session_state.vectorstore, 
-                    model_name,
+                    _normalize_model_name(model_name),
                     model_temperature
                 )
                 st.success("Conversation model updated with new settings!")
@@ -344,18 +355,18 @@ def process_documents(pdf_paths):
         # 2. Split text into chunks
         text_chunks = get_text_chunks(raw_text)
         
-        # 3. Create vector store
+        # 3. Create or load cached vector store
         vectorstore = get_vectorstore(text_chunks)
         st.session_state.vectorstore = vectorstore
         
-        # 4. Create conversation chain
-        model_name = getattr(st.session_state, 'model_name', "gemini-1.5-flash-latest")
-        model_temperature = getattr(st.session_state, 'model_temperature', 0.7)
-        st.session_state.conversation = get_conversation_chain(
-            vectorstore, 
-            model_name, 
-            model_temperature
-        )
+    # 4. Create conversation chain (default to stable gemini-pro)
+    model_name = getattr(st.session_state, 'model_name', "gemini-2.5-flash")
+    model_temperature = getattr(st.session_state, 'model_temperature', 0.7)
+    st.session_state.conversation = get_conversation_chain(
+        vectorstore, 
+        _normalize_model_name(model_name), 
+        model_temperature
+    )
 
 
 def get_pdf_text(pdf_path):
@@ -383,15 +394,40 @@ def get_text_chunks(text):
 
 
 def get_vectorstore(text_chunks):
-    """Create vector store from text chunks"""
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    """Create or load a local FAISS vector store from text chunks using FastEmbed (lightweight) embeddings."""
+    # Fast, CPU-friendly local embeddings with no heavy torch dependency
+    embeddings = FastEmbedEmbeddings()
+
+    # Cache directory for FAISS index
+    cache_dir = os.path.join("document_storage", "faiss_index")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # Compute a simple content hash to know if chunks changed
+    import hashlib
+    hasher = hashlib.sha256()
+    for t in text_chunks:
+        # Guard against None
+        if t:
+            hasher.update(t.encode("utf-8", errors="ignore"))
+    content_hash = hasher.hexdigest()[:16]
+    index_dir = os.path.join(cache_dir, content_hash)
+
+    # Try to load an existing index for this content
+    try:
+        if os.path.isdir(index_dir):
+            return FAISS.load_local(index_dir, embeddings, allow_dangerous_deserialization=True)
+    except Exception:
+        pass
+
+    # Build new index and save
     vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    vectorstore.save_local(index_dir)
     return vectorstore
 
 
-def get_conversation_chain(vectorstore, model_name="gemini-1.5-flash-latest", temperature=0.7):
+def get_conversation_chain(vectorstore, model_name="gemini-pro", temperature=0.7):
     """Create conversation chain with specified model and temperature"""
-    llm = ChatGoogleGenerativeAI(model=model_name, temperature=temperature)
+    llm = ChatGoogleGenerativeAI(model=_normalize_model_name(model_name), temperature=temperature)
     
     # Improved prompt with instructions to cite sources
     prompt = ChatPromptTemplate.from_template("""
@@ -422,10 +458,22 @@ def handle_user_input(user_question, chat_container):
     # Add user question to chat history
     st.session_state.chat_history.append({"role": "user", "content": user_question})
     
-    # Get response from conversation chain
+    # Get response from conversation chain, with model fallback on 404
     with st.spinner("Thinking..."):
-        response = st.session_state.conversation.invoke({'input': user_question})
-        answer = response['answer']
+        try:
+            response = st.session_state.conversation.invoke({'input': user_question})
+            answer = response['answer']
+        except GoogleNotFound as e:
+            # Fallback to a widely available model and retry once
+            fallback_model = "gemini-pro"
+            st.info(f"Selected model unavailable. Falling back to {fallback_model} and retrying…")
+            st.session_state.conversation = get_conversation_chain(
+                st.session_state.vectorstore,
+                fallback_model,
+                getattr(st.session_state, 'model_temperature', 0.7)
+            )
+            response = st.session_state.conversation.invoke({'input': user_question})
+            answer = response['answer']
     
     # Add bot response to chat history
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
