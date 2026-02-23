@@ -5,3 +5,9 @@ pip install -r req.txt
 
 pip install faiss-cpu
 streamlit run app.py
+
+
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r req.txt
+streamlit run app.py

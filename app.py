@@ -139,15 +139,12 @@ import google.generativeai as genai
 from google.api_core.exceptions import NotFound as GoogleNotFound
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.embeddings import FastEmbedEmbeddings
+from langchain_text_splitters import CharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
 import nest_asyncio
 import tempfile
 from datetime import datetime
@@ -395,8 +392,8 @@ def get_text_chunks(text):
 
 def get_vectorstore(text_chunks):
     """Create or load a local FAISS vector store from text chunks using FastEmbed (lightweight) embeddings."""
-    # Fast, CPU-friendly local embeddings with no heavy torch dependency
-    embeddings = FastEmbedEmbeddings()
+    # Use Google's embedding model (requires GOOGLE_API_KEY in .env)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
 
     # Cache directory for FAISS index
     cache_dir = os.path.join("document_storage", "faiss_index")
@@ -442,11 +439,23 @@ def get_conversation_chain(vectorstore, model_name="gemini-pro", temperature=0.7
         Question: {input}
     """)
     
-    document_chain = create_stuff_documents_chain(llm, prompt)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})  # Retrieve top 5 most relevant chunks
-    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
     
-    return retrieval_chain
+    def _format_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
+    
+    def _invoke(input_dict):
+        question = input_dict["input"]
+        docs = retriever.invoke(question)
+        context_str = _format_docs(docs)
+        response = (prompt | llm).invoke({"context": context_str, "input": question})
+        return {
+            "answer": response.content,
+            "context": docs,
+            "input": question
+        }
+    
+    return RunnableLambda(_invoke)
 
 
 def handle_user_input(user_question, chat_container):
